@@ -1,0 +1,67 @@
+name: MFA Daily Report
+
+on:
+  schedule:
+    # Times are UTC. US Eastern = UTC-4 (EDT, Mar–Nov) or UTC-5 (EST, Nov–Mar).
+    # Pre-market (EOD basis): ~8:10 AM ET -> 12:10 UTC (EDT). Runs WITHOUT --intraday.
+    - cron: "13 12 * * 1-5"
+    # Mid-session (intraday RVOL): ~10:30 AM ET -> 14:30 UTC (EDT). Runs WITH --intraday.
+    - cron: "33 14 * * 1-5"
+  workflow_dispatch:        # "Run workflow" button — trigger manually from GitHub web/mobile app
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# allow only one concurrent deploy
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Decide intraday flag
+        id: mode
+        run: |
+          # US market open ~13:30–20:00 UTC (EDT). Inside window -> use intraday RVOL.
+          H=$(date -u +%H); M=$(date -u +%M)
+          MINS=$((10#$H * 60 + 10#$M))
+          if [ "$MINS" -ge 810 ] && [ "$MINS" -le 1200 ]; then
+            echo "flag=--intraday" >> "$GITHUB_OUTPUT"
+          else
+            echo "flag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate report
+        run: |
+          mkdir -p public
+          python mfa_layer0.py --regime --alt ${{ steps.mode.outputs.flag }} \
+            --json public/layer0_out.json --html public/index.html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
