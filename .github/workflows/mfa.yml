@@ -5,8 +5,9 @@ on:
     # Times are UTC. US Eastern = UTC-4 (EDT, Mar–Nov) or UTC-5 (EST, Nov–Mar).
     # Pre-market (EOD basis): ~8:10 AM ET -> 12:10 UTC (EDT). Runs WITHOUT --intraday.
     - cron: "13 12 * * 1-5"
-    # Mid-session (intraday RVOL): ~10:30 AM ET -> 14:30 UTC (EDT). Runs WITH --intraday.
-    - cron: "33 14 * * 1-5"
+    # Mid-session (intraday RVOL): ~10:00 AM ET. 57 13 UTC fires a few min early to beat
+    # GitHub's cron lag so it lands near 10:00 EDT. (EST/winter: shift to "57 14".)
+    - cron: "57 13 * * 1-5"
   workflow_dispatch:        # "Run workflow" button — trigger manually from GitHub web/mobile app
 
 permissions:
