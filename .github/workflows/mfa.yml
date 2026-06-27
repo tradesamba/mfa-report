@@ -40,16 +40,29 @@ jobs:
           H=$(date -u +%H); M=$(date -u +%M)
           MINS=$((10#$H * 60 + 10#$M))
           if [ "$MINS" -ge 810 ] && [ "$MINS" -le 1200 ]; then
-            echo "flag=--intraday" >> "$GITHUB_OUTPUT"
+            echo "flag=--intraday"   >> "$GITHUB_OUTPUT"
+            echo "slot=midsession"   >> "$GITHUB_OUTPUT"
+            echo "other=premarket"   >> "$GITHUB_OUTPUT"
           else
-            echo "flag=" >> "$GITHUB_OUTPUT"
+            echo "flag="             >> "$GITHUB_OUTPUT"
+            echo "slot=premarket"    >> "$GITHUB_OUTPUT"
+            echo "other=midsession"  >> "$GITHUB_OUTPUT"
           fi
 
       - name: Generate report
         run: |
           mkdir -p public
+          # Carry forward the OTHER slot's already-published file so this deploy
+          # (which replaces the whole Pages site) doesn't wipe it. Best-effort.
+          BASE="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          curl -fsSL "$BASE/${{ steps.mode.outputs.other }}.html" \
+            -o "public/${{ steps.mode.outputs.other }}.html" || echo "no prior ${{ steps.mode.outputs.other }}.html yet"
+          # This run: write index.html (always latest) + this slot's named copy.
           python mfa_layer0.py --regime --alt ${{ steps.mode.outputs.flag }} \
             --json public/layer0_out.json --html public/index.html
+          cp public/index.html "public/${{ steps.mode.outputs.slot }}.html"
+          # Static landing page linking to all reports (committed in repo root).
+          cp history.html public/history.html
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

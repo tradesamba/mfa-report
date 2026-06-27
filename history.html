@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MFA Reports</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --fg:#e6e8eb; --mut:#9aa0aa; --acc:#4f8cff; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; padding:18px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .mut { color:var(--mut); font-size:13px; }
+  a.card { display:block; background:var(--card); border-radius:14px; padding:16px 18px;
+           margin:14px 0; text-decoration:none; color:var(--fg); border:1px solid #262a33; }
+  a.card:active { border-color:var(--acc); }
+  .t { font-size:17px; font-weight:600; }
+  .d { color:var(--mut); font-size:13px; margin-top:3px; }
+  .badge { float:right; font-size:11px; color:var(--acc); }
+  h2 { font-size:14px; color:var(--acc); margin:22px 0 6px; }
+</style>
+</head>
+<body>
+<h1>MFA Daily Reports</h1>
+<div class="mut">Numbers are code-sourced (yfinance/FRED). LLMs consume — never originate — them.
+Prices ~15 min delayed; confirm live at broker before entry.</div>
+
+<a class="card" href="index.html">
+  <span class="badge">always newest →</span>
+  <div class="t">⭐ Latest report</div>
+  <div class="d">Whichever run published most recently. Bookmark this one.</div>
+</a>
+
+<h2>Today's runs</h2>
+<a class="card" href="premarket.html">
+  <div class="t">🌅 Pre-market (~8:13 AM ET)</div>
+  <div class="d">EOD RVOL basis. Heads-up watchlist before the open.</div>
+</a>
+<a class="card" href="midsession.html">
+  <div class="t">📈 Mid-session (~10:00 AM ET)</div>
+  <div class="d">Intraday time-of-day-normalized RVOL. The one to trade off.</div>
+</a>
+
+<h2>Archive</h2>
+<div class="mut">Dated snapshots will be listed here once archiving is enabled.
+(Currently only the two named files above are retained; each is overwritten daily.)</div>
+
+</body>
+</html>
