@@ -31,6 +31,35 @@ def test_parse_fred_csv():
     return all(results)
 
 
+def test_parse_fred_json():
+    """Keyed-API JSON path: observations come NEWEST-first (sort_order=desc&limit=6);
+    parser must reverse to ascending and yield the SAME (latest, prior5, n) shape as CSV."""
+    print("test_parse_fred_json")
+    # desc order as the API returns it; one '.' missing value must be skipped.
+    js = ('{"observations":['
+          '{"date":"2026-06-26","value":"3.22"},'
+          '{"date":"2026-06-25","value":"3.20"},'
+          '{"date":"2026-06-24","value":"3.18"},'
+          '{"date":"2026-06-23","value":"3.15"},'
+          '{"date":"2026-06-22","value":"."},'        # skipped
+          '{"date":"2026-06-19","value":"3.12"},'
+          '{"date":"2026-06-18","value":"3.10"}]}')
+    latest, prior, n = m._parse_fred_json(js)
+    results = []
+    results.append(check("latest (newest after reverse)", latest, 3.22))
+    results.append(check("prior(rows[-6]=oldest)", prior, 3.10))
+    results.append(check("n valid (6 of 7, one '.')", n, 6))
+    # empty observations
+    e = m._parse_fred_json('{"observations":[]}')
+    results.append(check("empty -> None", e, (None, None, 0)))
+    # malformed / error payload (e.g. bad key) must not raise
+    bad = m._parse_fred_json('{"error_code":400,"error_message":"Bad Request."}')
+    results.append(check("error payload -> None", bad, (None, None, 0)))
+    notjson = m._parse_fred_json("<html>blocked</html>")
+    results.append(check("non-json -> None", notjson, (None, None, 0)))
+    return all(results)
+
+
 def test_interp():
     print("test_interp")
     results = []
@@ -242,7 +271,7 @@ def test_finnhub_parsing_monkeypatched():
 
 
 if __name__ == "__main__":
-    tests = [test_parse_fred_csv, test_interp, test_credit_spread_scoring,
+    tests = [test_parse_fred_csv, test_parse_fred_json, test_interp, test_credit_spread_scoring,
              test_regime_offline_forces_neutral, test_fred_fetch_failsafe,
              test_mins_since_open, test_intraday_rvol_math,
              test_intraday_rvol_single_day_fallback, test_intraday_rvol_no_data,

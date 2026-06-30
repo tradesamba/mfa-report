@@ -55,6 +55,11 @@ jobs:
           # Add it under repo Settings → Secrets and variables → Actions → New repository secret,
           # name FINNHUB_API_KEY. If unset, the run still works keyless (yfinance/FRED only).
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          # FRED API key (free, fred.stlouisfed.org). REQUIRED for macro/regime from Actions:
+          # the keyless fredgraph.csv endpoint is blocked from GitHub's datacenter IPs, so add
+          # FRED_API_KEY as a repo secret to use the official API. If unset, the run degrades to
+          # keyless FRED (works locally but shows the FRED badge yellow from CI).
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: |
           mkdir -p public
           # Carry forward the OTHER slot's already-published file so this deploy

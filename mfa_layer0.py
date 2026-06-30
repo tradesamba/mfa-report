@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 import urllib.request
 import urllib.error
@@ -198,18 +199,61 @@ def _parse_fred_csv(text):
     return latest, prior, len(rows)
 
 
-def fetch_fred(series_id):
-    """Fetch a FRED series CSV (no API key). Returns (latest, prior5, n) or (None,None,0).
+def _parse_fred_json(text):
+    """Parse a FRED *API* (api.stlouisfed.org) JSON response into (latest, prior5, n).
 
-    Network-optional: any failure (timeout, blocked, 4xx) returns the empty tuple so
-    the regime simply falls back to 'NEEDS FEED/ESTIMATE' rather than crashing.
+    The API is queried with sort_order=desc&limit=6, so observations arrive
+    NEWEST-first; we reverse to oldest-first to match _parse_fred_csv semantics
+    exactly: latest = last (newest), prior = rows[-6] if >=6 valid else rows[0].
+    Missing values are '.' (skipped). Pure-function, testable without network.
+    Returns (None, None, 0) if nothing usable is found.
     """
-    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
     try:
+        obs = json.loads(text).get("observations", [])
+    except (ValueError, AttributeError):
+        return None, None, 0
+    rows = []
+    for o in reversed(obs):                      # desc API order -> ascending
+        val = str(o.get("value", "")).strip()
+        if val in (".", "", "value"):
+            continue
+        try:
+            rows.append(float(val))
+        except ValueError:
+            continue
+    if not rows:
+        return None, None, 0
+    latest = rows[-1]
+    prior = rows[-6] if len(rows) >= 6 else rows[0]
+    return latest, prior, len(rows)
+
+
+def fetch_fred(series_id):
+    """Fetch a FRED series. Returns (latest, prior5, n) or (None, None, 0).
+
+    Two paths, same return shape:
+      • FRED_API_KEY env set  -> official API (api.stlouisfed.org/fred/series/observations,
+        JSON). This is the SUPPORTED programmatic endpoint and the one that survives from
+        GitHub Actions / datacenter IPs (the keyless fredgraph.csv path below is challenged
+        by Akamai bot-management from CI ranges -> the historical 'FRED unreachable' badge).
+      • no key                -> keyless fredgraph.csv (works locally / for dev, no secret).
+
+    Network-optional: any failure (timeout, blocked, 4xx) returns the empty tuple so the
+    regime simply falls back to 'NEEDS FEED/ESTIMATE' rather than crashing.
+    """
+    api_key = os.environ.get("FRED_API_KEY", "").strip()
+    try:
+        if api_key:
+            url = ("https://api.stlouisfed.org/fred/series/observations"
+                   f"?series_id={series_id}&file_type=json"
+                   f"&sort_order=desc&limit=6&api_key={api_key}")
+            req = urllib.request.Request(url, headers={"User-Agent": "mfa-layer0"})
+            with urllib.request.urlopen(req, timeout=FRED_TIMEOUT) as resp:
+                return _parse_fred_json(resp.read().decode("utf-8", "replace"))
+        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (mfa-layer0)"})
         with urllib.request.urlopen(req, timeout=FRED_TIMEOUT) as resp:
-            text = resp.read().decode("utf-8", "replace")
-        return _parse_fred_csv(text)
+            return _parse_fred_csv(resp.read().decode("utf-8", "replace"))
     except Exception:
         return None, None, 0
 
