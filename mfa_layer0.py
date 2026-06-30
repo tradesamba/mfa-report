@@ -921,8 +921,8 @@ def fetch_call_snapshot(tk, row):
 
 def main():
     ap = argparse.ArgumentParser(description="MFA Layer 0 — deterministic market-data layer")
-    ap.add_argument("tickers", nargs="*", default=DEFAULT_TICKERS,
-                    help="tickers to analyze (default: MFA test set)")
+    ap.add_argument("tickers", nargs="*", default=None,
+                    help="tickers to analyze (default: universe pre-screen or MFA test set)")
     ap.add_argument("--json", metavar="PATH", help="also write full result as JSON")
     ap.add_argument("--sections", action="store_true",
                     help="emit paste-ready MFA Section M/C/E (Gemini-step replacement)")
