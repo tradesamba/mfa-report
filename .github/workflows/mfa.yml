@@ -3,10 +3,18 @@ name: MFA Daily Report
 on:
   schedule:
     # Times are UTC. US Eastern = UTC-4 (EDT, Mar–Nov) or UTC-5 (EST, Nov–Mar).
+    # ┌─ DST: cron is fixed UTC. Twice a year, bump BOTH lines' HOUR by 1 (minute unchanged):
+    # │   Winter (EST, ~Nov→Mar): "13 12"→"13 13"  AND  "57 13"→"57 14"
+    # │   Summer (EDT, ~Mar→Nov): "13 13"→"13 12"  AND  "57 14"→"57 13"
+    # │   The MID-SESSION bump is the one that matters: left unshifted, "57 13" lands at 8:57 AM ET
+    # │   in winter (before the 9:30 open) so intraday RVOL has no live session (degrades to EOD).
+    # │   The pre-market bump just keeps it ~8:13 AM ET — cloud has no option chain, so small drift
+    # │   here is harmless. No detection-logic change needed (window approach has margin).
+    # └────────────────────────────────────────────────────────────────────────────────────────
     # Pre-market (EOD basis): ~8:10 AM ET -> 12:10 UTC (EDT). Runs WITHOUT --intraday.
     - cron: "13 12 * * 1-5"
     # Mid-session (intraday RVOL): ~10:00 AM ET. 57 13 UTC fires a few min early to beat
-    # GitHub's cron lag so it lands near 10:00 EDT. (EST/winter: shift to "57 14".)
+    # GitHub's cron lag so it lands near 10:00 EDT.
     - cron: "57 13 * * 1-5"
   workflow_dispatch:        # "Run workflow" button — trigger manually from GitHub web/mobile app
 
@@ -37,6 +45,11 @@ jobs:
         id: mode
         run: |
           # US market open ~13:30–20:00 UTC (EDT). Inside window -> use intraday RVOL.
+          # Threshold MINS 810 = 13:30 UTC (summer open), 1200 = 20:00 UTC (close). In winter the
+          # real open is 14:30 UTC, but this window is left at the EDT value on purpose: if the
+          # mid-session cron is DST-bumped (see schedule above) it lands ~14:57 and is correctly
+          # intraday; if NOT bumped it lands 13:57 and still flags intraday but pre-open RVOL just
+          # falls back to EOD (harmless for cloud — no option chain depends on it).
           H=$(date -u +%H); M=$(date -u +%M)
           MINS=$((10#$H * 60 + 10#$M))
           if [ "$MINS" -ge 810 ] && [ "$MINS" -le 1200 ]; then
