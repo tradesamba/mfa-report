@@ -416,6 +416,36 @@ def compute_regime(use_fred=True):
     return metrics
 
 
+def fred_badge_status(metrics):
+    """Summarize FRED reachability from the regime metrics, for a UI badge.
+
+    FRED backs exactly 3 series: Credit spreads (HY OAS), the 10Y-2Y yield curve, and the Fed/macro
+    DFF proxy. We count how many actually came from FRED this run:
+      - Credit spreads: name 'Credit spreads (HY OAS)' with a non-None score (it has NO non-FRED
+        fallback, so a score means FRED answered);
+      - Yield curve: the FRED branch labels it '...10Y-2Y, FRED)'; the yfinance fallback says
+        '10Y-13wk proxy', so only the former counts;
+      - Fed/macro: value starts 'proxy: DFF' only when FRED DFF resolved.
+    Returns {"on": bool, "n": int (0-3), "text": str}. on=True iff >=1 FRED series resolved."""
+    metrics = metrics or []
+    def _find(substr):
+        return next((x for x in metrics if substr in x["n"]), None)
+    n = 0
+    credit = _find("Credit spreads")
+    if credit and credit.get("s") is not None:
+        n += 1
+    curve = _find("Yield curve")
+    if curve and "FRED" in curve.get("n", ""):
+        n += 1
+    fed = _find("Fed / macro")
+    if fed and str(fed.get("v", "")).startswith("proxy: DFF"):
+        n += 1
+    if n:
+        return {"on": True, "n": n, "text": f"✓ FRED: {n}/3 macro series (credit / curve / Fed)"}
+    return {"on": False, "n": 0,
+            "text": "⚠ FRED unreachable — 0/3 macro series (credit / curve / Fed all fell back)"}
+
+
 def regime_summary(metrics):
     """Return the one-line regime verdict string (used by both console + HTML)."""
     valid = [m for m in metrics if m["s"] is not None]

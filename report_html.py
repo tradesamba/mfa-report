@@ -121,6 +121,10 @@ def build_html(rows, regime_metrics, regime_summary, run_ts):
                          "text": ("⚠ Finnhub not used this run (no key / unreachable) — "
                                   "earnings from yfinance, no price cross-check")}
 
+    # FRED data-source badge — mirrors the Finnhub one so both feeds are verifiable at a glance.
+    import mfa_layer0
+    fred_badge = mfa_layer0.fred_badge_status(regime_metrics)
+
     sec_m = _section_m(cleared)
     sec_b = _section_b(cleared)
     sec_c = _section_c(cleared)
@@ -169,6 +173,7 @@ def build_html(rows, regime_metrics, regime_summary, run_ts):
         "run_ts": run_ts,
         "survivors": survivors,
         "finnhub_badge": finnhub_badge,
+        "fred_badge": fred_badge,
         "dropped": [{"t": r.ticker, "why": "; ".join(r.conflicts)} for r in dropped],
         "regime": regime_summary,
         "grok_prompt": grok_prompt,
@@ -229,6 +234,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
 <h1>MFA Layer 0 — Daily Report</h1>
 <div class="mut" id="runts"></div>
 <div class="srcbadge" id="finnhubBadge"></div>
+<div class="srcbadge" id="fredBadge"></div>
 
 <div id="banner"></div>
 
@@ -304,6 +310,10 @@ document.getElementById('runts').textContent = 'Generated ' + D.run_ts;
 const fb = D.finnhub_badge || {on:false, text:''};
 const fbEl = document.getElementById('finnhubBadge');
 if(fbEl){ fbEl.textContent = fb.text || ''; fbEl.className = 'srcbadge ' + (fb.on ? 'on' : 'off'); }
+
+const fr = D.fred_badge || {on:false, text:''};
+const frEl = document.getElementById('fredBadge');
+if(frEl){ frEl.textContent = fr.text || ''; frEl.className = 'srcbadge ' + (fr.on ? 'on' : 'off'); }
 const b = document.getElementById('banner');
 if(STAND_DOWN){ b.className='banner standdown'; b.textContent='⛔ STAND DOWN — 0 survivors cleared the integrity gate. No trades today.'; }
 else { b.className='banner go'; b.textContent='✅ '+D.survivors.length+' survivors cleared: '+D.survivors.join(', '); }
