@@ -225,16 +225,40 @@ _TEMPLATE = r"""<!DOCTYPE html>
   button { background:var(--acc); color:#fff; border:0; border-radius:10px; padding:11px 14px;
            font-size:15px; font-weight:600; width:100%; margin-top:8px; cursor:pointer; }
   button.sec { background:#2a2f3a; }
+  .hdr { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
+  .dbgbtn { width:auto; margin:0; padding:8px 12px; font-size:13px; background:#2a2f3a; flex:0 0 auto; }
+  #dbgPanel { border:1px solid var(--acc); }
+  #dbgPanel input[type=text]{ width:100%; background:#0c0e12; color:var(--fg); border:1px solid #2a2f3a;
+             border-radius:10px; padding:10px; font-size:13px; margin-bottom:6px; }
+  .dbgrow { display:flex; gap:8px; }
+  .dbgrow button { flex:1; }
   .step { font-size:12px; color:var(--mut); margin-bottom:6px; }
   .hidden { display:none; }
   .ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)}
 </style>
 </head>
 <body>
-<h1>MFA Layer 0 — Daily Report</h1>
-<div class="mut" id="runts"></div>
+<div class="hdr">
+  <div>
+    <h1>MFA Layer 0 — Daily Report</h1>
+    <div class="mut" id="runts"></div>
+  </div>
+  <button class="dbgbtn" id="dbgToggle" onclick="toggleDbg()">📥 Debug</button>
+</div>
 <div class="srcbadge" id="finnhubBadge"></div>
 <div class="srcbadge" id="fredBadge"></div>
+
+<div class="card hidden" id="dbgPanel">
+  <div class="step">DEBUG / VALIDATE · download everything (Layer 0 data + prompts + your LLM replies) as one
+    Markdown file to hand to Claude here — to validate results, explain unexpected output, or fine-tune.</div>
+  <div class="step" style="margin-top:8px">Paste Claude's final output (optional):</div>
+  <textarea id="claudeOut" placeholder="Paste Claude's Top-4 / STAND DOWN reply here (optional)..."></textarea>
+  <input type="text" id="debugNote" placeholder='What should Claude explain? e.g. "why STAND DOWN?" (optional)'>
+  <div class="dbgrow">
+    <button onclick="downloadDebug(this)">📥 Download report</button>
+    <button class="sec" onclick="copyDebug(this)">📋 Copy report</button>
+  </div>
+</div>
 
 <div id="banner"></div>
 
@@ -298,6 +322,134 @@ function genClaude(){
   document.getElementById('claudeBox').value = body;
   document.getElementById('step3').classList.remove('hidden');
   document.getElementById('step3').scrollIntoView({behavior:'smooth'});
+}
+
+// ── Debug / validate report ────────────────────────────────────────────────
+const DEBUG_SCHEMA_VERSION = 1;
+function toggleDbg(){
+  const p = document.getElementById('dbgPanel');
+  p.classList.toggle('hidden');
+  if(!p.classList.contains('hidden')) p.scrollIntoView({behavior:'smooth'});
+}
+function _slug(s){ return (s||'').replace(/[^0-9A-Za-z]+/g,'-').replace(/^-|-$/g,''); }
+function buildDebugReport(){
+  // Reconstruct the EXACT Claude prompt the wizard produced (incl. the Grok reply the user pasted).
+  const grokReply = (document.getElementById('grokReply')||{}).value || '';
+  const claudeOut = (document.getElementById('claudeOut')||{}).value || '';
+  const note = (document.getElementById('debugNote')||{}).value || '';
+  const claudePrompt = D.claude_prefix + (grokReply.trim() || '[no Grok reply pasted]') + D.claude_suffix;
+  const isBear = Array.isArray(D.bcs);
+  const kind = isBear ? ('bearcall · profile=' + (D.profile||'?') + (D.slot?(' · slot='+D.slot):'')) : 'cloud (long screen)';
+  const L = [];
+  L.push('# MFA Debug Report');
+  L.push('');
+  L.push('> Generated for handing to Claude to **validate results / explain unexpected output / fine-tune**.');
+  L.push('> Numbers are deterministic Layer 0 (code-sourced). LLMs consume them — never re-derive or alter.');
+  L.push('');
+  L.push('## Validation checklist (what to verify)');
+  L.push('- Every value Claude used matches the Layer 0 numbers below (no hallucinated prices/technicals).');
+  L.push('- The verdict respects the integrity gate (only CLEARED tickers are tradeable).');
+  if(isBear){
+    L.push('- Each Top-4 bear-call has an EMPTY veto list, `basis=="chain"`, POP ≤ 85, and NO earnings before expiry+2d.');
+    L.push('- STAND DOWN is justified by the per-name veto reasons (distinguish a real veto from an after-hours stale-option-liquidity artifact: short_delta≈0 / iv_rv≈0 / V6 on every name ⇒ run was off-hours).');
+  } else {
+    L.push('- Top 4 = only tickers passing RVOL + zero vetoes + threshold + checklist; STAND DOWN if none.');
+  }
+  L.push('');
+  L.push('## Run metadata');
+  L.push('| field | value |');
+  L.push('|---|---|');
+  L.push('| run_ts | ' + (D.run_ts||'') + ' |');
+  L.push('| report kind | ' + kind + ' |');
+  L.push('| page URL | ' + location.href + ' |');
+  L.push('| downloaded at | ' + new Date().toISOString() + ' |');
+  L.push('| user agent | ' + navigator.userAgent + ' |');
+  L.push('| debug_schema_version | ' + DEBUG_SCHEMA_VERSION + ' |');
+  L.push('');
+  L.push('## Data provenance');
+  L.push('- FRED: ' + ((D.fred_badge&&D.fred_badge.text)||'(n/a)'));
+  L.push('- Finnhub: ' + ((D.finnhub_badge&&D.finnhub_badge.text)||'(n/a)'));
+  L.push('');
+  L.push('## Regime');
+  L.push('`' + (D.regime||'') + '`');
+  L.push('');
+  L.push('| metric | value | score |');
+  L.push('|---|---|---|');
+  (D.regime_metrics||[]).forEach(m=>{ const s=(m.s===null||m.s===undefined)?'—':m.s; L.push('| '+m.n+' | '+m.v+' | '+s+' |'); });
+  L.push('');
+  L.push('## Integrity gate');
+  L.push('- Survivors (cleared): ' + ((D.survivors||[]).join(', ')||'(none)'));
+  L.push('- Dropped: ' + ((D.dropped||[]).map(d=>d.t+' ('+d.why+')').join('; ')||'(none)'));
+  L.push('');
+  L.push('## Layer 0 — per ticker');
+  L.push('| Tk | ok | price | as_of | RSI | MACDh | EMA | ATR% | ADX | RVOL | RVOLgate | ADVfloor | beta | next_earn | conflicts/flags |');
+  L.push('|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
+  (D.rows||[]).forEach(r=>{
+    const cf=[].concat(r.conflicts||[],r.flags||[]).join('; ');
+    L.push('| '+[r.ticker, r.ok, r.price, r.as_of, r.rsi14, r.macd_hist, r.ema_ribbon, r.atr_pct,
+      r.adx14, r.rvol, r.passes_rvol_gate, r.passes_adv_floor, r.beta, r.next_earnings, cf].join(' | ')+' |');
+  });
+  L.push('');
+  if(isBear){
+    L.push('## Bear-call decisions (the STAND-DOWN explainer)');
+    L.push('| Tk | score | suitable | tradeable | basis | kind/DTE | short→long | credit/width | CWR | POP | shortΔ | vetoes |');
+    L.push('|---|---|---|---|---|---|---|---|---|---|---|---|');
+    (D.bcs||[]).forEach(r=>{
+      const sl=(r.basis==='chain')?(r.short+'→'+r.long):'—';
+      const cw=(r.basis==='chain')?(r.credit+'/'+r.width):'—';
+      L.push('| '+[r.t, r.score, r.suitable, r.tradeable, r.basis, (r.kind||'')+' '+(r.dte||'')+'DTE',
+        sl, cw, r.cwr, r.pop, r.delta, (r.vetoes||[]).join(' ; ')].join(' | ')+' |');
+    });
+    L.push('');
+  }
+  L.push('## Exact Grok prompt (step 1)');
+  L.push('```\n' + (D.grok_prompt||'') + '\n```');
+  L.push('');
+  L.push('## Grok reply (as used)');
+  L.push('```\n' + (grokReply.trim() || '[not pasted]') + '\n```');
+  L.push('');
+  L.push('## Exact Claude prompt (step 3)');
+  L.push('```\n' + claudePrompt + '\n```');
+  L.push('');
+  L.push('## Claude output (the result to validate)');
+  L.push('```\n' + (claudeOut.trim() || '[not pasted — pre-Claude debug report]') + '\n```');
+  L.push('');
+  L.push('## User question');
+  L.push(note.trim() || '_(none — general validation requested)_');
+  L.push('');
+  L.push('## Raw data (lossless — the page\'s embedded D + captured fields)');
+  const bundle = {debug_schema_version: DEBUG_SCHEMA_VERSION, downloaded_at: new Date().toISOString(),
+    page_url: location.href, user_agent: navigator.userAgent,
+    grok_reply: grokReply, claude_prompt: claudePrompt, claude_output: claudeOut, user_note: note, D: D};
+  L.push('```json\n' + JSON.stringify(bundle, null, 2) + '\n```');
+  return L.join('\n');
+}
+function _dbgFilename(){
+  const isBear = Array.isArray(D.bcs);
+  const tag = isBear ? ('bear-' + (D.profile||'p')) : 'cloud';
+  return 'mfa-debug_' + tag + '_' + _slug(D.run_ts) + '.md';
+}
+function downloadDebug(btn){
+  const md = buildDebugReport();
+  try {
+    const blob = new Blob([md], {type:'text/markdown'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = _dbgFilename();
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1500);
+    const o=btn.textContent; btn.textContent='✅ Downloaded'; setTimeout(()=>btn.textContent=o,1400);
+  } catch(e){ copyDebug(btn); }   // fallback for browsers that block Blob download
+}
+function copyDebug(btn){
+  const md = buildDebugReport();
+  navigator.clipboard.writeText(md).then(()=>{
+    const o=btn.textContent; btn.textContent='✅ Copied'; setTimeout(()=>btn.textContent=o,1400);
+  }).catch(()=>{
+    const ta=document.createElement('textarea'); ta.value=md; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy'); ta.remove();
+    const o=btn.textContent; btn.textContent='✅ Copied'; setTimeout(()=>btn.textContent=o,1400);
+  });
 }
 
 function el(tag, txt, cls){ const e=document.createElement(tag); if(txt!=null)e.textContent=txt; if(cls)e.className=cls; return e; }

@@ -270,13 +270,27 @@ def test_finnhub_parsing_monkeypatched():
     return all(results)
 
 
+def test_report_html_debug_hooks():
+    """The 'Download debug report' feature lives entirely in report_html._TEMPLATE. Assert the
+    key client-side hooks are present so a refactor can't silently drop the feature."""
+    print("test_report_html_debug_hooks")
+    import report_html as rh
+    t = rh._TEMPLATE
+    results = []
+    for hook in ["id=\"dbgPanel\"", "id=\"claudeOut\"", "id=\"debugNote\"",
+                 "function buildDebugReport", "function downloadDebug", "function copyDebug",
+                 "DEBUG_SCHEMA_VERSION", "MFA Debug Report"]:
+        results.append(check("template has " + hook, hook in t, True))
+    return all(results)
+
+
 if __name__ == "__main__":
     tests = [test_parse_fred_csv, test_parse_fred_json, test_interp, test_credit_spread_scoring,
              test_regime_offline_forces_neutral, test_fred_fetch_failsafe,
              test_mins_since_open, test_intraday_rvol_math,
              test_intraday_rvol_single_day_fallback, test_intraday_rvol_no_data,
              test_regime_metric_shapes, test_finnhub_graceful_nokey,
-             test_finnhub_parsing_monkeypatched]
+             test_finnhub_parsing_monkeypatched, test_report_html_debug_hooks]
     passed = 0
     for t in tests:
         try:
