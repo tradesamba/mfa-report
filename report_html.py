@@ -106,6 +106,21 @@ def build_html(rows, regime_metrics, regime_summary, run_ts):
     dropped = [r for r in rows if not r.ok]
     survivors = [r.ticker for r in cleared]
 
+    # Finnhub data-source badge: prove (or disprove) that Finnhub was reached this run.
+    # earnings_source=='finnhub' only when Finnhub returned a forward date; price_xcheck is
+    # non-empty only when the Finnhub quote endpoint answered. Summarize across cleared rows.
+    fh_earn = sum(1 for r in cleared if getattr(r, "earnings_source", "") == "finnhub")
+    fh_quote = sum(1 for r in cleared if getattr(r, "price_xcheck", ""))
+    n_clear = len(cleared)
+    if fh_earn or fh_quote:
+        finnhub_badge = {"on": True,
+                         "text": f"✓ Finnhub: {fh_earn}/{n_clear} earnings dates · "
+                                 f"{fh_quote}/{n_clear} price cross-checks"}
+    else:
+        finnhub_badge = {"on": False,
+                         "text": ("⚠ Finnhub not used this run (no key / unreachable) — "
+                                  "earnings from yfinance, no price cross-check")}
+
     sec_m = _section_m(cleared)
     sec_b = _section_b(cleared)
     sec_c = _section_c(cleared)
@@ -153,6 +168,7 @@ def build_html(rows, regime_metrics, regime_summary, run_ts):
     payload = {
         "run_ts": run_ts,
         "survivors": survivors,
+        "finnhub_badge": finnhub_badge,
         "dropped": [{"t": r.ticker, "why": "; ".join(r.conflicts)} for r in dropped],
         "regime": regime_summary,
         "grok_prompt": grok_prompt,
@@ -185,6 +201,9 @@ _TEMPLATE = r"""<!DOCTYPE html>
   h1 { font-size:18px; margin:0 0 2px; }
   h2 { font-size:15px; margin:18px 0 8px; color:var(--acc); }
   .mut { color:var(--mut); font-size:12px; }
+  .srcbadge { font-size:11px; margin:4px 0 2px; padding:4px 8px; border-radius:7px; display:inline-block; }
+  .srcbadge.on { background:#10331f; color:var(--ok); border:1px solid #1f5c38; }
+  .srcbadge.off { background:#33270f; color:var(--warn); border:1px solid #5c451f; }
   .card { background:var(--card); border-radius:12px; padding:14px; margin:12px 0; }
   .banner { padding:12px 14px; border-radius:12px; font-weight:600; margin:12px 0; }
   .standdown { background:#3a1414; color:var(--bad); border:1px solid var(--bad); }
@@ -209,6 +228,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
 <body>
 <h1>MFA Layer 0 — Daily Report</h1>
 <div class="mut" id="runts"></div>
+<div class="srcbadge" id="finnhubBadge"></div>
 
 <div id="banner"></div>
 
@@ -279,6 +299,11 @@ function row(cells){ const tr=document.createElement('tr'); cells.forEach(c=>{ c
 
 // run timestamp + banner
 document.getElementById('runts').textContent = 'Generated ' + D.run_ts;
+
+// Finnhub data-source badge — visible proof of whether the Action reached Finnhub this run
+const fb = D.finnhub_badge || {on:false, text:''};
+const fbEl = document.getElementById('finnhubBadge');
+if(fbEl){ fbEl.textContent = fb.text || ''; fbEl.className = 'srcbadge ' + (fb.on ? 'on' : 'off'); }
 const b = document.getElementById('banner');
 if(STAND_DOWN){ b.className='banner standdown'; b.textContent='⛔ STAND DOWN — 0 survivors cleared the integrity gate. No trades today.'; }
 else { b.className='banner go'; b.textContent='✅ '+D.survivors.length+' survivors cleared: '+D.survivors.join(', '); }

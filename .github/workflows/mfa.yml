@@ -50,6 +50,11 @@ jobs:
           fi
 
       - name: Generate report
+        env:
+          # Finnhub free-tier key (reliable forward earnings date + price cross-check).
+          # Add it under repo Settings → Secrets and variables → Actions → New repository secret,
+          # name FINNHUB_API_KEY. If unset, the run still works keyless (yfinance/FRED only).
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
         run: |
           mkdir -p public
           # Carry forward the OTHER slot's already-published file so this deploy

@@ -214,6 +214,112 @@ def fetch_fred(series_id):
         return None, None, 0
 
 
+# Sector ETFs (canonical sector-rotation breadth) and a broad large-cap basket (breadth proxy).
+SECTOR_ETFS = ["XLK", "XLF", "XLE", "XLV", "XLI", "XLP", "XLY", "XLU", "XLB", "XLRE", "XLC"]
+BREADTH_BASKET = ["AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "AVGO", "TSLA", "JPM", "V",
+                  "UNH", "XOM", "JNJ", "WMT", "MA", "PG", "HD", "COST", "ORCL", "BAC",
+                  "KO", "PEP", "CVX", "MRK", "ADBE", "CRM", "NFLX", "AMD", "TMO", "ABBV"]
+PUTCALL_PROXY_ETFS = ["SPY", "QQQ", "IWM"]   # aggregate index ETF put/call OI (coarse positioning)
+
+
+def _regime_hist(sym, period="1y"):
+    """Close series for a regime symbol, or None on any failure (network-optional)."""
+    try:
+        h = yf.Ticker(sym).history(period=period)
+        return h["Close"].dropna() if len(h) else None
+    except Exception:
+        return None
+
+
+def regime_sector_rotation():
+    """CANONICAL: fraction of the 11 SPDR sector ETFs trading above their own 50-DMA.
+    Broad participation (most sectors above) = risk-on; narrow = risk-off. Returns
+    (metric_dict) with score in [-5,+5] or s=None if too few ETFs resolve."""
+    above = total = 0
+    for etf in SECTOR_ETFS:
+        c = _regime_hist(etf, "6mo")
+        if c is None or len(c) < 50:
+            continue
+        total += 1
+        if float(c.iloc[-1]) > float(c.tail(50).mean()):
+            above += 1
+    if total < 7:                      # need most sectors present to be meaningful
+        return {"n": "Sector rotation (% sectors >50DMA)", "v": "no data", "s": None}
+    frac = above / total
+    return {"n": "Sector rotation (% sectors >50DMA)",
+            "v": f"{above}/{total} sectors ({frac*100:.0f}%)",
+            "s": _interp(frac, 0.30, 0.70)}   # 30% above -> -5, 70% above -> +5
+
+
+def regime_breadth_proxy():
+    """PROXY (labeled): fraction of a ~30-name large-cap basket above its 200-DMA.
+    A stand-in for the true $SPXA200R breadth index, which has no free feed. Value
+    string is prefixed 'proxy:' so the report never presents it as canonical."""
+    above = total = 0
+    for sym in BREADTH_BASKET:
+        c = _regime_hist(sym, "1y")
+        if c is None or len(c) < 200:
+            continue
+        total += 1
+        if float(c.iloc[-1]) > float(c.tail(200).mean()):
+            above += 1
+    if total < 20:
+        return {"n": "Market breadth (%>200DMA)", "v": "no data", "s": None}
+    frac = above / total
+    return {"n": "Market breadth (%>200DMA)",
+            "v": f"proxy: {above}/{total} (>{frac*100:.0f}% above 200DMA)",
+            "s": _interp(frac, 0.30, 0.70)}
+
+
+def regime_fed_proxy(use_fred=True):
+    """PROXY (labeled): Fed-funds level + 3-month trajectory from FRED DFF.
+    Falling/low rates = supportive (risk-on), rising/high = restrictive. Not the
+    qualitative FOMC stance, so labeled 'proxy:'. Needs FRED; None if unavailable."""
+    if not use_fred:
+        return {"n": "Fed / macro backdrop", "v": "NEEDS FEED/ESTIMATE", "s": None}
+    latest, prior, n = fetch_fred("DFF")
+    if latest is None:
+        return {"n": "Fed / macro backdrop", "v": "NEEDS FEED/ESTIMATE", "s": None}
+    # level: 5.5%+ restrictive -> -, <=2% accommodative -> +
+    s_level = _interp(latest, 5.5, 2.0)
+    # trajectory nudge: prior is ~5 obs back (DFF is daily, so coarse) — cutting is bullish
+    if prior is not None:
+        if latest < prior - 0.10:
+            s_level = min(5.0, s_level + 1.5)   # easing
+        elif latest > prior + 0.10:
+            s_level = max(-5.0, s_level - 1.5)  # tightening
+    traj = ("easing" if prior is not None and latest < prior - 0.10 else
+            "tightening" if prior is not None and latest > prior + 0.10 else "steady")
+    return {"n": "Fed / macro backdrop", "v": f"proxy: DFF {latest:.2f}% ({traj})",
+            "s": round(s_level, 1)}
+
+
+def regime_putcall_proxy():
+    """PROXY (labeled): aggregate nearest-expiry put/call OI across SPY/QQQ/IWM.
+    Contrarian: very high put/call (fear) -> bullish for tape; very low (greed) ->
+    bearish. Coarse vs the CBOE equity put/call series, so labeled 'proxy:'."""
+    put_oi = call_oi = 0.0
+    got = 0
+    for etf in PUTCALL_PROXY_ETFS:
+        try:
+            tk = yf.Ticker(etf)
+            exps = tk.options
+            if not exps:
+                continue
+            ch = tk.option_chain(exps[0])
+            call_oi += float(ch.calls["openInterest"].fillna(0).sum())
+            put_oi += float(ch.puts["openInterest"].fillna(0).sum())
+            got += 1
+        except Exception:
+            continue
+    if got == 0 or call_oi <= 0:
+        return {"n": "Equity put/call (contrarian)", "v": "NEEDS FEED/ESTIMATE", "s": None}
+    pc = put_oi / call_oi
+    # contrarian: pc 0.7 (greed) -> -5, pc 1.3 (fear) -> +5
+    return {"n": "Equity put/call (contrarian)", "v": f"proxy: P/C OI {pc:.2f}",
+            "s": _interp(pc, 0.7, 1.3)}
+
+
 def compute_regime(use_fred=True):
     """Score the regime metrics that have a deterministic free source (yfinance).
 
@@ -295,10 +401,16 @@ def compute_regime(use_fred=True):
     else:
         metrics.append({"n": "VIX term (VIX/VIX3M)", "v": "no data", "s": None})
 
-    # Metrics with NO free feed — must be supplied (operator or bounded LLM estimate per V6 §0B)
-    for name in ["Market breadth (%>200DMA)", "NYSE advance/decline", "Sector rotation",
-                 "Fed / macro backdrop", "Economic Surprise Index",
-                 "Equity put/call (contrarian)"]:
+    # ── Newly-sourced metrics (regime port) ─────────────────────────────────
+    # Sector rotation: CANONICAL (sector ETFs vs their 50DMA).
+    metrics.append(regime_sector_rotation())
+    # Three LABELED proxies — counted toward N but value-prefixed 'proxy:' in output.
+    metrics.append(regime_breadth_proxy())
+    metrics.append(regime_fed_proxy(use_fred=use_fred))
+    metrics.append(regime_putcall_proxy())
+
+    # Genuinely unsourced for free — stay honest (do NOT fabricate).
+    for name in ["NYSE advance/decline", "Economic Surprise Index"]:
         metrics.append({"n": name, "v": "NEEDS FEED/ESTIMATE", "s": None})
 
     return metrics
@@ -315,8 +427,8 @@ def regime_summary(metrics):
         return f"RegimeScore = {score} → band: {band} (N={n} ≥9 ✔)"
     partial = round(2 * sum(m["s"] for m in valid) / n) if n else 0
     return (f"Only N={n} of 12 metrics sourced (need ≥9). Partial avg {partial} → "
-            f"FORCED NEUTRAL (±15) per V6 §0A until the remaining {9-n}+ metrics are supplied "
-            f"(breadth / A-D / sector / Fed / econ-surprise / credit / put-call).")
+            f"FORCED NEUTRAL (±15) per V6 §0A until ≥9 are present. Unsourced-for-free: "
+            f"NYSE A/D, Economic-Surprise Index.")
 
 
 def print_regime(metrics):
@@ -342,11 +454,13 @@ class TickerRow:
     low_52w: float = float("nan")
     high_52w: float = float("nan")
     next_earnings: str = ""
+    earnings_source: str = ""            # 'finnhub' (preferred) or 'yfinance' or '' (none)
     earnings_in_window: bool = False     # Veto #1: earnings inside the hold window
     adv: float = float("nan")
     # live numbers
     price: float = float("nan")
     as_of: str = ""
+    price_xcheck: str = ""               # Finnhub quote cross-check note (informational only)
     # technicals
     ema_ribbon: str = ""
     ema_spread_pct: float = float("nan")
@@ -479,20 +593,36 @@ def analyze(ticker: str, bench_hist: pd.DataFrame, alt: bool = False,
         row.last_split = "none"
 
     earn_date = None
+    # Prefer Finnhub's forward earnings calendar (verified reliable) when a key is present; fall
+    # back to yfinance tk.calendar (often stale/empty) otherwise. Finnhub failure → silent fallback.
     try:
-        cal = tk.calendar
-        ed = None
-        if isinstance(cal, dict):
-            ed = cal.get("Earnings Date")
-            if isinstance(ed, (list, tuple)) and ed:
-                ed = ed[0]
-        if ed is not None:
-            earn_date = getattr(ed, "date", lambda: ed)()
-            row.next_earnings = str(earn_date)
-        else:
-            row.next_earnings = "unknown"
+        import finnhub_data
+        fh_earn = finnhub_data.next_earnings(ticker)
     except Exception:
-        row.next_earnings = "unknown"
+        fh_earn = None
+    if fh_earn:
+        try:
+            earn_date = date.fromisoformat(fh_earn)
+            row.next_earnings = fh_earn
+            row.earnings_source = "finnhub"
+        except (ValueError, TypeError):
+            earn_date = None
+    if earn_date is None:
+        try:
+            cal = tk.calendar
+            ed = None
+            if isinstance(cal, dict):
+                ed = cal.get("Earnings Date")
+                if isinstance(ed, (list, tuple)) and ed:
+                    ed = ed[0]
+            if ed is not None:
+                earn_date = getattr(ed, "date", lambda: ed)()
+                row.next_earnings = str(earn_date)
+                row.earnings_source = "yfinance"
+            else:
+                row.next_earnings = "unknown"
+        except Exception:
+            row.next_earnings = "unknown"
 
     # Veto #1 — earnings inside the hold window [today, today + HOLD_WINDOW_DAYS]
     if isinstance(earn_date, date):
@@ -542,6 +672,22 @@ def analyze(ticker: str, bench_hist: pd.DataFrame, alt: bool = False,
 
     if price > row.ath * ATH_TOLERANCE:
         row.conflicts.append(f"price {price:.2f} > ATH*{ATH_TOLERANCE} ({row.ath:.2f}) — impossible")
+
+    # Finnhub quote cross-check (informational only — yfinance stays authoritative for the
+    # series). Flags a large yf-vs-Finnhub divergence so a stale/odd snapshot is visible; it
+    # never overrides the price or creates a hard conflict. No key → skipped silently.
+    try:
+        import finnhub_data
+        q = finnhub_data.quote(ticker)
+        if q and q.get("current") and price:
+            diff_pct = abs(q["current"] - price) / price * 100
+            if diff_pct >= 3.0:
+                row.price_xcheck = f"⚠ yf ${price:.2f} vs Finnhub ${q['current']:.2f} ({diff_pct:.1f}% diff)"
+                row.flags.append(row.price_xcheck)
+            else:
+                row.price_xcheck = f"✓ Finnhub ${q['current']:.2f} ({diff_pct:.1f}% diff)"
+    except Exception:
+        pass
 
     day_moves = close.pct_change().abs().tail(252)
     split_dates = set(splits.index.date) if (splits is not None and len(splits)) else set()

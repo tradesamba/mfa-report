@@ -178,11 +178,76 @@ def test_intraday_rvol_no_data():
     return check("empty -> no_intraday", status, "no_intraday")
 
 
+def test_regime_metric_shapes():
+    """Regime port: the new metric builders always return a well-formed {n,v,s} dict even when
+    the network is blocked (s=None / 'no data'), and proxies are labeled."""
+    print("test_regime_metric_shapes")
+    results = []
+    for fn in (m.regime_sector_rotation, m.regime_breadth_proxy, m.regime_putcall_proxy):
+        d = fn()
+        results.append(check(f"{fn.__name__} well-formed", set(d.keys()) == {"n", "v", "s"}, True))
+    fed = m.regime_fed_proxy(use_fred=False)
+    results.append(check("fed proxy no-fred -> None", fed["s"], None))
+    return all(results)
+
+
+def test_finnhub_graceful_nokey():
+    """Finnhub port: with NO FINNHUB_API_KEY, every helper returns None and never raises — the
+    pipeline must run keyless exactly as before."""
+    print("test_finnhub_graceful_nokey")
+    import os
+    import finnhub_data as fh
+    saved = os.environ.pop("FINNHUB_API_KEY", None)
+    results = []
+    try:
+        results.append(check("api_key None without env", fh.api_key(), None))
+        results.append(check("next_earnings None without key", fh.next_earnings("AAPL"), None))
+        results.append(check("quote None without key", fh.quote("AAPL"), None))
+        results.append(check("_get None without key", fh._get("quote", {"symbol": "AAPL"}), None))
+    finally:
+        if saved is not None:
+            os.environ["FINNHUB_API_KEY"] = saved
+    return all(results)
+
+
+def test_finnhub_parsing_monkeypatched():
+    """Finnhub port: with a fake key + monkeypatched _get, next_earnings picks the earliest FUTURE
+    date and quote returns a clean dict — without touching the network."""
+    print("test_finnhub_parsing_monkeypatched")
+    import os, datetime as _dt
+    import finnhub_data as fh
+    results = []
+    os.environ["FINNHUB_API_KEY"] = "TESTKEY"
+    today = _dt.datetime.now(_dt.timezone.utc).date()
+    future1 = (today + _dt.timedelta(days=10)).isoformat()
+    future2 = (today + _dt.timedelta(days=40)).isoformat()
+    past = (today - _dt.timedelta(days=5)).isoformat()
+    orig = fh._get
+    try:
+        fh._get = lambda path, params: {"earningsCalendar": [
+            {"symbol": "T", "date": future2}, {"symbol": "T", "date": past},
+            {"symbol": "T", "date": future1}]}
+        results.append(check("earliest future date chosen", fh.next_earnings("T"), future1))
+        fh._get = lambda path, params: {"earningsCalendar": []}
+        results.append(check("empty calendar -> None", fh.next_earnings("T"), None))
+        fh._get = lambda path, params: {"c": 281.74, "pc": 283.78}
+        q = fh.quote("T")
+        results.append(check("quote parsed", (q["current"], q["prev_close"]), (281.74, 283.78)))
+        fh._get = lambda path, params: {"c": 0}     # bad quote
+        results.append(check("zero quote -> None", fh.quote("T"), None))
+    finally:
+        fh._get = orig
+        os.environ.pop("FINNHUB_API_KEY", None)
+    return all(results)
+
+
 if __name__ == "__main__":
     tests = [test_parse_fred_csv, test_interp, test_credit_spread_scoring,
              test_regime_offline_forces_neutral, test_fred_fetch_failsafe,
              test_mins_since_open, test_intraday_rvol_math,
-             test_intraday_rvol_single_day_fallback, test_intraday_rvol_no_data]
+             test_intraday_rvol_single_day_fallback, test_intraday_rvol_no_data,
+             test_regime_metric_shapes, test_finnhub_graceful_nokey,
+             test_finnhub_parsing_monkeypatched]
     passed = 0
     for t in tests:
         try:
