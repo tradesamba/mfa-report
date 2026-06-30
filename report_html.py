@@ -101,6 +101,31 @@ def _section_c(cleared):
     return "\n".join(lines)
 
 
+def _section_opt(cleared):
+    """Call chain snapshot block for the Claude prompt (chain-verified, ATM + 1st OTM).
+    Only rows with a call_snapshot dict are included — omitted rows get a no-chain note.
+    Claude must use ONLY these strikes; it must NOT invent or estimate option prices."""
+    lines = ["SECTION OPT — CALL CHAIN SNAPSHOT (chain-verified, 21-45 DTE, ATM + 1st OTM)",
+             "TICKER | expiry | DTE | ATM strike | ATM ask | OTM strike | OTM ask | IV%"]
+    any_data = False
+    for r in cleared:
+        snap = getattr(r, "call_snapshot", None)
+        if snap:
+            any_data = True
+            otm_s = f"${snap['otm_strike']:.0f}" if snap.get("otm_strike") else "—"
+            otm_a = f"${snap['otm_ask']:.2f}" if snap.get("otm_ask") else "—"
+            iv = f"{snap['atm_iv']:.0f}%" if snap.get("atm_iv") else "—"
+            lines.append(
+                f"{r.ticker} | {snap['expiry']} | {snap['dte']}d "
+                f"| ${snap['atm_strike']:.0f} | ${snap['atm_ask']:.2f} "
+                f"| {otm_s} | {otm_a} | {iv}")
+        else:
+            lines.append(f"{r.ticker} — no chain data (omit from options play)")
+    if not any_data:
+        lines.append("(no call snapshots available — options plays cannot be recommended this run)")
+    return "\n".join(lines)
+
+
 def build_html(rows, regime_metrics, regime_summary, run_ts):
     cleared = [r for r in rows if r.ok]
     dropped = [r for r in rows if not r.ok]
@@ -128,6 +153,7 @@ def build_html(rows, regime_metrics, regime_summary, run_ts):
     sec_m = _section_m(cleared)
     sec_b = _section_b(cleared)
     sec_c = _section_c(cleared)
+    sec_opt = _section_opt(cleared)
 
     grok_prompt = (
         "I have attached the MFA V6 Comprehensive Guide. Run Phase 1 Social Sentiment Analysis.\n"
@@ -158,6 +184,7 @@ def build_html(rows, regime_metrics, regime_summary, run_ts):
         f"════ REGIME ════\n{regime_summary}\n\n"
         "════ LAYER 0 DATA (deterministic — DO NOT re-quote or alter) ════\n"
         f"{sec_m}\n\n{sec_b}\n\n{sec_c}\n\n"
+        f"{sec_opt}\n\n"
         "════ SENTIMENT (from Grok Step 1) ════\n")
 
     claude_suffix = (
@@ -174,7 +201,13 @@ def build_html(rows, regime_metrics, regime_summary, run_ts):
         "8. Select TOP 4 — ONLY tickers passing RVOL + zero vetoes + threshold + checklist. "
         "Fewer than 4 → output only those. ZERO → say STAND DOWN. Do NOT manufacture a Top 4.\n"
         "9. HONESTY: never present any trade as >85% confidence. Confluence ≠ win probability.\n\n"
-        "OUTPUT: Top 4 briefing (options + stock play, confluence breakdown, honest win-rate band) "
+        "OPTIONS PLAY RULE: For each top-4 pick, recommend a specific call option using ONLY the "
+        "strikes and asks from SECTION OPT above — do NOT invent or estimate strikes. "
+        "If SECTION OPT has no data for a ticker, give the stock play only and note 'no chain data'.\n\n"
+        "OUTPUT: Top 4 briefing for each pick:\n"
+        "  (a) STOCK PLAY: entry level, stop, target, rationale\n"
+        "  (b) OPTIONS PLAY: strike → expiry from SECTION OPT, current ask ~$X, why this strike\n"
+        "  (c) Confluence breakdown + honest win-rate band\n"
         "+ trade summary table + benchmark confluence table. Or STAND DOWN.")
 
     payload = {
@@ -525,6 +558,118 @@ else {
 // fill prompts
 document.getElementById('grokBox').value = D.grok_prompt;
 if(STAND_DOWN){ ['step1','step2'].forEach(id=>document.getElementById(id).classList.add('hidden')); }
+</script>
+</body>
+</html>"""
+
+
+def universe_editor_html(tickers: list) -> str:
+    """Self-contained universe editor page served from GitHub Pages.
+
+    Lets the user view, edit, validate, and download the bullish-universe
+    JSON file without touching Python. The downloaded file is committed to
+    cloud/cloud_universe.json and picked up automatically on the next run.
+    """
+    import json as _json
+    count = len(set(tickers))
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MFA Cloud — Universe Editor</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#0f1115;color:#e6e8eb;font:15px/1.6 -apple-system,sans-serif;padding:18px}}
+h1{{font-size:1.2rem;margin-bottom:4px;color:#fff}}
+.sub{{color:#8b949e;font-size:.85rem;margin-bottom:16px}}
+.card{{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;margin-bottom:14px}}
+textarea{{width:100%;height:340px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+  border-radius:6px;padding:10px;font:13px/1.5 'Menlo','Courier New',monospace;resize:vertical}}
+.row{{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}}
+button{{padding:9px 18px;border:none;border-radius:6px;cursor:pointer;font-size:.9rem;font-weight:600}}
+.btn-val{{background:#388bfd;color:#fff}}
+.btn-dl{{background:#2ea043;color:#fff}}
+.btn-val:hover{{background:#58a6ff}}
+.btn-dl:hover{{background:#3fb950}}
+#status{{margin-top:10px;padding:8px 12px;border-radius:6px;font-size:.85rem;display:none}}
+.ok{{background:#0d2119;color:#3fb950;border:1px solid #238636}}
+.err{{background:#2d0f0f;color:#f85149;border:1px solid #da3633}}
+.info{{background:#0d1b2e;color:#58a6ff;border:1px solid #388bfd}}
+.note{{color:#8b949e;font-size:.82rem;line-height:1.6;margin-top:10px}}
+a{{color:#58a6ff}}
+</style>
+</head>
+<body>
+<h1>MFA Cloud — Universe Editor</h1>
+<p class="sub">Edit the ~{count}-ticker bullish-momentum universe. Download → commit → push to update.</p>
+
+<div class="card">
+  <p style="color:#8b949e;font-size:.85rem;margin-bottom:8px">
+    One ticker per line, or comma-separated. Uppercase. Focus on optionable US equities with
+    ADV&nbsp;&gt;&nbsp;2M, beta&nbsp;0.7–3.5, and momentum character (growth, tech, high-IV names).
+    Remove delisted / illiquid / low-IV defensives freely.
+  </p>
+  <textarea id="ta" spellcheck="false">{chr(10).join(sorted(set(tickers)))}</textarea>
+  <div class="row">
+    <button class="btn-val" onclick="validate()">Validate</button>
+    <button class="btn-dl" onclick="download()">Download universe JSON</button>
+  </div>
+  <div id="status"></div>
+</div>
+
+<div class="card">
+  <p style="font-weight:600;margin-bottom:6px">How to update the live universe</p>
+  <ol class="note" style="padding-left:1.2rem">
+    <li>Edit the textarea above (add/remove tickers).</li>
+    <li>Click <b>Validate</b> to check for errors.</li>
+    <li>Click <b>Download universe JSON</b> — save the file as
+        <code>cloud/cloud_universe.json</code> in your local repo clone.</li>
+    <li>Commit and push. The next GitHub Actions workflow run picks it up automatically.</li>
+  </ol>
+  <p class="note" style="margin-top:8px">
+    <b>Future LLM hook:</b> write a JSON array of tickers to
+    <code>cloud/cloud_universe_override.json</code> from a Claude or Grok CLI call —
+    it takes priority over this file with no code change needed.
+  </p>
+</div>
+
+<script>
+function parseTickers(raw) {{
+  return [...new Set(
+    raw.split(/[\\n,]+/)
+       .map(t => t.trim().toUpperCase().replace(/[^A-Z0-9.]/g,''))
+       .filter(t => t.length >= 1 && t.length <= 6)
+  )].sort();
+}}
+function showStatus(msg, cls) {{
+  const el = document.getElementById('status');
+  el.textContent = msg; el.className = cls; el.style.display = 'block';
+}}
+function validate() {{
+  const raw = document.getElementById('ta').value;
+  const tickers = parseTickers(raw);
+  const bad = raw.split(/[\\n,]+/)
+    .map(t => t.trim().toUpperCase().replace(/[^A-Z0-9.]/g,''))
+    .filter(t => t.length > 0 && (t.length > 6 || /^[0-9]+$/.test(t)));
+  if (bad.length) {{
+    showStatus('⚠ Suspicious entries (length > 6 or digits-only): ' + bad.join(', '), 'err');
+    return;
+  }}
+  document.getElementById('ta').value = tickers.join('\\n');
+  showStatus(`✓ Valid — ${{tickers.length}} unique tickers`, 'ok');
+}}
+function download() {{
+  const raw = document.getElementById('ta').value;
+  const tickers = parseTickers(raw);
+  if (!tickers.length) {{ showStatus('Nothing to download — textarea is empty.', 'err'); return; }}
+  const blob = new Blob([JSON.stringify(tickers, null, 2)], {{type:'application/json'}});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'cloud_universe.json';
+  a.click();
+  showStatus(`Downloaded cloud_universe.json (${{tickers.length}} tickers). Commit it to cloud/ and push.`, 'info');
+}}
 </script>
 </body>
 </html>"""

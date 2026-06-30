@@ -557,6 +557,8 @@ class TickerRow:
     putcall_oi: float = float("nan")  # put OI / call OI, nearest expiry
     dark_pool: str = "N/A (no free feed)"
     gex: str = "N/A (no free feed)"
+    # call chain snapshot (Section OPT) — fetched after analyze(), cleared rows only
+    call_snapshot: object = field(default=None)   # dict or None
 
 
 def _scalar(x):
@@ -849,6 +851,74 @@ def emit_mfa_sections(rows, run_ts):
     return "\n".join(out)
 
 
+def fetch_call_snapshot(tk, row):
+    """Fetch ATM + nearest OTM call for a 21-45 DTE swing window.
+
+    Returns a dict with:
+      expiry, dte, atm_strike, atm_ask, atm_iv,
+      otm_strike, otm_ask, otm_iv
+    Returns None if: no chain, no expiry in 21-45 DTE window, no OTM calls.
+    Failures are silent (never raises) — omitted from SECTION OPT.
+    """
+    from datetime import date as _date
+    try:
+        exps = tk.options
+    except Exception:
+        return None
+    if not exps:
+        return None
+
+    today = _date.today()
+
+    def dte(e):
+        return (_date.fromisoformat(e) - today).days
+
+    candidates = [e for e in exps if 21 <= dte(e) <= 45]
+    if not candidates:
+        return None
+    exp = candidates[0]
+    d = dte(exp)
+
+    try:
+        chain = tk.option_chain(exp)
+        calls = chain.calls
+    except Exception:
+        return None
+    if calls is None or calls.empty:
+        return None
+
+    spot = row.price
+    otm = calls[calls["strike"] >= spot].copy()
+    if otm.empty:
+        return None
+
+    # ATM: strike closest to spot
+    atm_row = otm.iloc[(otm["strike"] - spot).abs().argmin()]
+    # OTM: first strike strictly above ATM
+    above = otm[otm["strike"] > float(atm_row["strike"])]
+    otm_row = above.iloc[0] if not above.empty else None
+
+    def _ask(r):
+        a = float(r["ask"])
+        return a if a > 0 else float(r["lastPrice"])
+
+    def _iv(r):
+        iv = float(r["impliedVolatility"])
+        return round(iv * 100, 1) if iv > 0 else None
+
+    result = {
+        "expiry": exp,
+        "dte": d,
+        "atm_strike": float(atm_row["strike"]),
+        "atm_ask": round(_ask(atm_row), 2),
+        "atm_iv": _iv(atm_row),
+        "otm_strike": float(otm_row["strike"]) if otm_row is not None else None,
+        "otm_ask": round(_ask(otm_row), 2) if otm_row is not None else None,
+        "otm_iv": _iv(otm_row) if otm_row is not None else None,
+    }
+    return result
+
+
 def main():
     ap = argparse.ArgumentParser(description="MFA Layer 0 — deterministic market-data layer")
     ap.add_argument("tickers", nargs="*", default=DEFAULT_TICKERS,
@@ -867,7 +937,23 @@ def main():
     ap.add_argument("--html", metavar="PATH",
                     help="write a self-contained mobile HTML report with copy-to-Grok/Claude wizard")
     args = ap.parse_args()
-    tickers = args.tickers or DEFAULT_TICKERS
+
+    # ── Universe resolution ────────────────────────────────────────────────────
+    # When no explicit tickers are given AND --html is active (i.e. a full
+    # automated run), load the universe and pre-screen to top 25.
+    # Explicit CLI tickers always bypass pre-screen for local/test use.
+    universe_tickers = None
+    if not args.tickers and args.html:
+        try:
+            from universe import load_universe, cheap_prescreen
+            raw = load_universe()
+            tickers = cheap_prescreen(raw, max_keep=25)
+            universe_tickers = raw
+        except Exception as ex:
+            print(f"[UNIVERSE] pre-screen failed ({ex}), using DEFAULT_TICKERS")
+            tickers = DEFAULT_TICKERS
+    else:
+        tickers = args.tickers or DEFAULT_TICKERS
 
     run_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     print(f"MFA LAYER 0  ·  {run_ts}  ·  source: yfinance (deterministic feed)\n")
@@ -959,10 +1045,41 @@ def main():
 
     if args.html:
         from report_html import build_html
+
+        # Fetch call snapshots for cleared rows (SECTION OPT in Claude prompt)
+        cleared_rows = [r for r in rows if r.ok]
+        if cleared_rows:
+            print(f"\nFetching call snapshots for {len(cleared_rows)} cleared tickers ...")
+            for r in cleared_rows:
+                try:
+                    tk = yf.Ticker(r.ticker)
+                    r.call_snapshot = fetch_call_snapshot(tk, r)
+                    status = (f"${r.call_snapshot['atm_strike']:.0f}→"
+                              f"${r.call_snapshot['otm_strike']:.0f} "
+                              f"{r.call_snapshot['expiry']}"
+                              if r.call_snapshot else "no chain")
+                    print(f"  {r.ticker}: {status}")
+                except Exception as ex:
+                    print(f"  {r.ticker}: snapshot error — {ex}")
+
         html_doc = build_html(rows, regime_metrics, regime_sum, run_ts)
         with open(args.html, "w") as fh:
             fh.write(html_doc)
         print(f"\nHTML report written to {args.html}")
+
+        # Write universe editor page alongside the main report
+        if universe_tickers:
+            import os as _os
+            try:
+                from report_html import universe_editor_html
+                editor_path = _os.path.join(
+                    _os.path.dirname(_os.path.abspath(args.html)),
+                    "universe_editor.html")
+                with open(editor_path, "w") as fh:
+                    fh.write(universe_editor_html(universe_tickers))
+                print(f"Universe editor written to {editor_path}")
+            except Exception as ex:
+                print(f"universe_editor.html skipped: {ex}")
 
 
 if __name__ == "__main__":
