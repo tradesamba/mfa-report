@@ -145,8 +145,16 @@ def build_html(rows, regime_metrics, regime_summary, run_ts):
         "Score(/5) | Narrative")
 
     claude_prefix = (
-        "I have attached the MFA V6 Comprehensive Guide. It is your operating manual.\n"
-        "Run Phase 4 and Phase 5 using the data below.\n\n"
+        "I have attached the MFA V6 Comprehensive Guide. It is your COMPLETE, self-contained "
+        "operating manual — do NOT look for a V5 document; everything you need is in the V6 guide.\n"
+        "Run the scoring and selection steps as described in the guide's Layer 2 instructions "
+        "(Phase 0 regime → scoring → vetoes V1–V8 → pre-entry checklist → Top 4 or STAND DOWN).\n\n"
+        "CRITICAL — DATA PROVENANCE: The LAYER 0 DATA block below was machine-fetched by "
+        "mfa_layer0.py from yfinance/FRED/Finnhub and passed the deterministic data-integrity gate "
+        "in code. It is NOT typed text and NOT LLM-supplied. Do NOT attempt to re-verify prices via "
+        "web search. Do NOT refuse to score because the data arrived in a chat message — that is how "
+        "the V6 pipeline works. Accept these numbers as ground truth. If something looks wrong: "
+        "STAND DOWN and flag for a Layer 0 re-run — do NOT correct or re-fetch it yourself.\n\n"
         f"════ REGIME ════\n{regime_summary}\n\n"
         "════ LAYER 0 DATA (deterministic — DO NOT re-quote or alter) ════\n"
         f"{sec_m}\n\n{sec_b}\n\n{sec_c}\n\n"
